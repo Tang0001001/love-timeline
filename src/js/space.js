@@ -5,7 +5,10 @@ import { INVITE_TTL_HOURS, STORAGE_BUCKET, DEFAULT_MUSIC_URL } from './config.js
 import {
   toast, openModal, confirmDialog, createPhotoPicker, readableError, showFormError, clearFormError
 } from './editor.js';
-import { signedUrl, uploadSingleImage, escapeHtml, removeStorageFiles, listAllObjectPaths } from './photos.js';
+import {
+  signedUrl, uploadSingleImage, escapeHtml,
+  removeStorageFiles, listAllObjectPaths, queueStorageDeletes
+} from './photos.js';
 
 /** 全局共享状态 */
 export const state = {
@@ -183,6 +186,17 @@ export function openSettingsModal(onSaved) {
           <label class="form-label">背景音乐链接（可选，mp3 直链）</label>
           <input name="music_url" type="url" class="form-input" placeholder="https://…/song.mp3" value="${escapeAttr(settings.music_url || '')}" />
         </div>
+        ${state.myRole === 'owner' ? `
+        <div class="pt-4 border-t border-[#e6cfd6] dark:border-nightline">
+          <p class="text-xs font-medium text-[#c05b6d] mb-1.5">危险区域</p>
+          <p class="text-xs text-muted dark:text-nightmuted leading-relaxed mb-2.5">
+            解散情侣空间将永久删除全部时间轴事件、照片记录、设置与寄语，云端照片文件也会一并清理。此操作<b>不可恢复</b>。
+          </p>
+          <button type="button" data-act="dissolve"
+            class="w-full h-11 rounded-xl border border-[#e3b8c1] dark:border-[#6b4550] text-sm font-medium text-[#c05b6d] dark:text-[#e394a4] active:scale-[0.98] transition">
+            解散情侣空间
+          </button>
+        </div>` : ''}
       </div>`,
     onSubmit: async (form) => {
       clearFormError(form);
@@ -259,6 +273,10 @@ export function openSettingsModal(onSaved) {
     document.querySelector(`[data-picker="${key}"]`).appendChild(p.el);
     pickers[key] = p;
   }
+
+  // 解散空间入口（仅 owner；放在设置弹窗中，保证任何状态下都能访问）
+  const dsBtn = document.querySelector('#modal-root [data-act="dissolve"]');
+  if (dsBtn) dsBtn.addEventListener('click', dissolveFlow);
 }
 
 function toLocalInputValue(iso) {
@@ -445,13 +463,25 @@ async function dissolveFlow() {
   });
   if (!ok2) return;
 
+  const spaceId = state.space.id;
+
+  // 先尽力清理 Storage 文件（删除空间行后成员校验会失效，无法再删文件）。
+  // 这一步绝不能阻断解散：清理失败时把路径放入待清理队列，稍后自动重试。
   try {
-    // 先清理 Storage 文件（删除空间行后成员校验会失效，无法再删文件）
-    const paths = await listAllObjectPaths(state.space.id);
+    const paths = await listAllObjectPaths(spaceId);
     if (paths.length) {
-      await removeStorageFiles(paths);
+      try {
+        await removeStorageFiles(paths);
+      } catch (e) {
+        queueStorageDeletes(paths);
+      }
     }
-    const { error } = await supabase.from('couple_spaces').delete().eq('id', state.space.id);
+  } catch (e) {
+    console.warn('列举云端照片失败，跳过文件清理', e);
+  }
+
+  try {
+    const { error } = await supabase.from('couple_spaces').delete().eq('id', spaceId);
     if (error) throw error;
     toast('空间已解散', 'notice');
     location.href = location.pathname; // 回到初始状态重新路由

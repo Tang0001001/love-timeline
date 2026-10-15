@@ -14,7 +14,9 @@
 --           删除 timeline_events 级联删除其照片记录。
 -- ============================================================================
 
-create extension if not exists pgcrypto;
+-- pgcrypto 提供 gen_random_bytes / digest；Supabase 约定扩展装在 extensions 模式
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 -- ---------------------------------------------------------------------------
 -- 1. 数据表
@@ -222,7 +224,7 @@ $$;
 create or replace function public.create_invitation(p_ttl_hours integer default 48)
 returns text
 language plpgsql security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
 declare
   v_user  uuid := auth.uid();
@@ -303,7 +305,7 @@ $$;
 create or replace function public.redeem_invitation(p_code text)
 returns uuid
 language plpgsql security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
 declare
   v_user    uuid := auth.uid();
